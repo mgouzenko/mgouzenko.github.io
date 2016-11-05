@@ -1,0 +1,15 @@
+digraph G {
+  graph[splines=ortho];
+  {
+    rank=same;
+    proc1[label="Process 3 (running)"];
+    proc2[label="Process 4"];
+    proc3[label="Process 1"];
+    proc4[label="Process 2"];
+
+    label_node[label="t = 20" shape="plaintext"]
+  }
+
+  {label_node->proc1 [style=invis]};
+  proc1->proc2->proc3->proc4->proc1
+}
