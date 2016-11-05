@@ -18,10 +18,13 @@ of writing a round robin scheduler is complicated by two confounding factors:
   * Bugs in scheduler code will cause the OS to go into kernel panic, freezing the system without providing any logs or meaningful error messages.
 
 In this post, I hope to ease students' suffering by addressing the first bullet
-point. In particular, I will try to explain how key components of the scheduler
-work and how one may plug their own scheduler into the existing infrastructure.
+point. In particular, I will try to explain how the scheduler's infrastructure
+is set up and how one may plug their own scheduler into this infrastructure. Note
+that I will NOT explain Linux's CFS algorithm here, nor will I explain
+group scheduling. These are implementation details of Linux's scheduling algorithm,
+and the main goal here is to understand how to plug in a *new* scheduler.
 
-# A Top Down Approach to Understanding the Scheduler
+## A Top Down Approach to Understanding the Scheduler
 In my explanation, I'm going to start off treating the scheduler as a black
 box. I start by explaining the APIs that the rest of the OS uses to interact
 with the scheduler. In the process, I will make gross over-simplifications, and
@@ -30,7 +33,7 @@ scheduler's internals, unfolding the truth behind these simplifications. By the
 end of this post, you should be able to start tackling the problem of writing
 your own working scheduler.
 
-# What is the scheduler?
+## What is the scheduler?
 Linux is a multi-tasking system. At any given time, there are many processes
 active at once, but a given CPU can only perform work on behalf of one process
 at a time. At a high level, the OS context switches from process to process,
@@ -42,7 +45,7 @@ switching. In particular, the scheduler has two main jobs:
   * It provides an interface to halt the currently running process and switch to a new one.
   * It must indicate to the OS when a new process should be run.
 
-# The Runqueue
+## The Runqueue
 Here's the first over-simplification: you can think of the scheduler as a
 system that maintains a simple queue of processes in the form of a linked list.
 The process at the head of the queue is allowed to run for some "time slice" -
@@ -98,5 +101,66 @@ static void __sched notrace __schedule(bool preempt)
 
 The function `pick_next_task` picks the `task_struct` associated with the
 process that should be run next. If we consider t=0 in Figure 1,
-`pick_next_task` would return the `task_struct` for Process 2. Then, `context_switch`
-switches the CPU's state to that of the next process.
+`pick_next_task` would return the `task_struct` for Process 2. Then,
+`context_switch` switches the CPU's state to that of the next process, so that
+it may run.
+
+## How does schedule() get called?
+Great, so we've seen that `schedule()` is used to 1) pick the next task and
+2) context switch to that task. But, when does this *actually* happen? How
+does the kernel know that a process's time slice is up, and that schedule
+should be called?
+
+We tackle this question by looking at the function `update_process_times`, shown below.
+
+{% highlight c %}
+/*
+* Called from the timer interrupt handler to charge one tick to the current
+* process.  user_tick is 1 if the tick is user time, 0 for system.
+*/
+void update_process_times(int user_tick)
+{
+	struct task_struct *p = current;
+
+	/* Note: this timer irq context must be accounted for as well. */
+	account_process_tick(p, user_tick);
+	run_local_timers();
+	rcu_check_callbacks(user_tick);
+#ifdef CONFIG_IRQ_WORK
+	if (in_irq())
+	irq_work_tick();
+#endif
+	scheduler_tick();
+	run_posix_cpu_timers(p);
+}
+{% endhighlight %}
+
+
+This function is called whenever the clock ticks. Notice how `update_process_times`
+invokes `scheduler_tick`. In `scheduler_tick`, the scheduler checks to see if the
+running process's time has expired. If so, it sets a (over-simplification alert) global
+flag called `need_resched`. This indicates to the rest of the kernel that the
+`schedule` should be called.
+
+But wait, why the heck can't the scheduler just call `schedule` by itself, from within the timer
+interrupt? After all, if the scheduler knows that a process's time has expired, shouldn't it
+just context switch right away?
+
+As it turns out, it is not always safe to call schedule. In particular, if the
+currently running process is holding a spin lock, it cannot be put to sleep.
+(Let me repeat that one more time because people always forget: **you cannot
+sleep with a spin lock.** Sleeping with a spin lock will cause the kernel to
+deadlock, and will bring you anguish for many hours when you can't figure out
+why your process mysteriously froze.)
+
+Thus, when the scheduler sets the `need_resched` flag, it's saying "please
+kernel, invoke `schedule` at your earliest convenience, when it's safe to do
+so." The kernel keeps a count of how many spin locks the currently running
+process has acquired. When that count goes down to 0, the kernel knows that
+it's okay to put the process to sleep. So, the kernel checks the `need_resched`
+flag in two main places:
+
+  * when returning from an interrupt handler
+  * when returning to user-space from a system call
+
+If `need_resched` is `True` and the spinlock count is 0, then the kernel calls `schedule`.
