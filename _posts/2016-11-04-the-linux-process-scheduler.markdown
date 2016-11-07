@@ -377,6 +377,10 @@ It seems a bit silly, but the sched_class's `pick_next_task` is expected to call
 */
 {% endhighlight %}
 
+Note that this was not the case in prior kernels; `put_prev_task` [used to be
+called](http://lxr.free-electrons.com/source/kernel/sched/core.c?v=3.11#L2445)
+by the core scheduler before it called `pick_next_task`.
+
 # task_tick
 
 {% highlight c %}
@@ -403,6 +407,8 @@ With SMP, there's a `need_resched` flag for every CPU. Thus, `resched_curr`
 might involve sending an APIC inter-processor interrupt to another processor
 (you don't want to go here). The takeway is that you should just use
 `resched_curr` to set `need_resched`, and don't try to do this yourself.
+
+Note: in prior kernel versions, `resched_curr` used to be called `resched_task`.
 
 
 # select_task_rq
