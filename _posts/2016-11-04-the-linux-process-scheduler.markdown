@@ -403,3 +403,55 @@ With SMP, there's a `need_resched` flag for every CPU. Thus, `resched_curr`
 might involve sending an APIC inter-processor interrupt to another processor
 (you don't want to go here). The takeway is that you should just use
 `resched_curr` to set `need_resched`, and don't try to do this yourself.
+
+
+# select_task_rq
+
+{% highlight c %}
+/* Returns an integer corresponding to the CPU that this task should run on */
+int select_task_rq(struct task_struct *p, int task_cpu, int sd_flag, int flags);
+{% endhighlight%}
+
+The core scheduler invokes this function to figure out which CPU to assign a task
+to. This is used for distributing processes accross multiple CPUs; the core
+scheduler will call enqueue_task, passing the runqueue corresponding to the CPU
+that is returned by this function. CPU assignment obviously occurs when a
+process is first forked, but CPU reassignment can happen for a large variety of reasons.
+Here are some instances where `select_task_rq` is called:
+
+  * When a process is first forked.
+  * When a task is woken up after having gone to sleep.
+  * In response to any of the syscalls in the execv family. This is an
+  optimization, since it doesn't hurt the cache to migrate a process that's
+  about to call exec.
+  * And many more places...
+
+You can check *why* `select_task_rq` was called by looking at `sd_flag`. The possible
+values of the flag are enumerated in `sched.h`:
+
+{% highlight c %}
+#define SD_LOAD_BALANCE         0x0001  /* Do load balancing on this domain. */
+#define SD_BALANCE_NEWIDLE      0x0002  /* Balance when about to become idle */
+#define SD_BALANCE_EXEC         0x0004  /* Balance on exec */
+#define SD_BALANCE_FORK         0x0008  /* Balance on fork, clone */
+#define SD_BALANCE_WAKE         0x0010  /* Balance on wakeup */
+#define SD_WAKE_AFFINE          0x0020  /* Wake task to waking CPU */
+#define SD_SHARE_CPUCAPACITY    0x0080  /* Domain members share cpu power */
+#define SD_SHARE_POWERDOMAIN    0x0100  /* Domain members share power domain */
+#define SD_SHARE_PKG_RESOURCES  0x0200  /* Domain members share cpu pkg resources */
+#define SD_SERIALIZE            0x0400  /* Only a single load balancing instance */
+#define SD_ASYM_PACKING         0x0800  /* Place busy groups earlier in the domain */
+#define SD_PREFER_SIBLING       0x1000  /* Prefer to place tasks in a sibling domain */
+#define SD_OVERLAP              0x2000  /* sched_domains of this level overlap */
+#define SD_NUMA                 0x4000  /* cross-node balancing */
+{% endhighlight %}
+
+For instance, `sd_flag == SD_BALANCE_FORK` whenever `select_task_rq` is called to
+determine the CPU of a newly forked task.
+
+Note that `select_task_rq` should return a CPU that `p` is allowed to run on.
+Each `task_struct` has a
+[member](http://lxr.free-electrons.com/source/include/linux/sched.h#L1499)
+called `cpus_allowed`, of type `cpumask_t`. This member represents the task's
+CPU affinity - i.e. which CPUs it can run on. It's possible to iterate over these
+CPUs with the macro `for_each_cpu`, defined [here](http://lxr.free-electrons.com/source/include/linux/cpumask.h#L216).
