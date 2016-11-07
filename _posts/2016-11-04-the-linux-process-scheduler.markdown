@@ -20,9 +20,9 @@ of writing a round robin scheduler is complicated by two confounding factors:
 In this post, I hope to ease students' suffering by addressing the first bullet
 point. In particular, I will try to explain how the scheduler's infrastructure
 is set up and how one may plug their own scheduler into this infrastructure. Note
-that I will NOT explain Linux's CFS algorithm here, nor will I explain
-group scheduling. These are implementation details of Linux's scheduling algorithm,
-and the main goal here is to understand how to plug in a *new* scheduler.
+that I will NOT explain CFS here, nor will I explain group scheduling. These
+are implementation details of Linux's scheduling algorithm, and the main goal
+here is to understand how to plug in a *new* scheduler.
 
 ## A Top Down Approach to Understanding the Scheduler
 In my explanation, I'm going to start off treating the scheduler as a black
@@ -51,9 +51,10 @@ system that maintains a simple queue of processes in the form of a linked list.
 The process at the head of the queue is allowed to run for some "time slice" -
 say, 10 milliseconds. After this time slice expires, the process is moved to
 the back of the queue, and the next process gets to run on the CPU for the same
-time slice.
+time slice. When a running process is forcibly stopped and taken off the CPU,
+we say that it has been **preempted**.
 
-This linked list of processes waiting to have a go on the CPU is called the
+The linked list of processes waiting to have a go on the CPU is called the
 runqueue. Each CPU has its own runqueue, and a given process may appear on only
 one CPU's runqueue at a time. Processes CAN migrate between various CPUs'
 runqueues, but we'll save this discussion for later.
@@ -70,11 +71,11 @@ don't recommend it just yet.
 
 
 ## Switching to a new process
-The `schedule()` function is used to halt the currently running process and
-switch to a new one. This function invokes `__schedule()` to do most of the real work.
-The function is pretty long, but the portion relevant to us is here:
+The `schedule` function is used to halt the currently running process and
+switch to a new one. This function invokes `__schedule` to do most of the real work.
+Here is the portion of `__schedule` relevant to us:
 
-{% highlight c++ %}
+{% highlight c %}
 static void __sched notrace __schedule(bool preempt)
 {
         struct task_struct *prev, *next;
@@ -99,19 +100,39 @@ static void __sched notrace __schedule(bool preempt)
 }
 {% endhighlight %}
 
-The function `pick_next_task` picks the `task_struct` associated with the
-process that should be run next. If we consider t=0 in Figure 1,
+The function `pick_next_task` returns the `task_struct` associated with the
+process that should be run next. If we consider t=10 in Figure 1,
 `pick_next_task` would return the `task_struct` for Process 2. Then,
 `context_switch` switches the CPU's state to that of the next process, so that
 it may run.
 
 ## How does schedule() get called?
 Great, so we've seen that `schedule()` is used to 1) pick the next task and
-2) context switch to that task. But, when does this *actually* happen? How
-does the kernel know that a process's time slice is up, and that schedule
-should be called?
+2) context switch to that task. But, when does this *actually* happen?
 
-We tackle this question by looking at the function `update_process_times`, shown below.
+
+Firstly, a user-space program might voluntarily go to sleep waiting for an IO
+event or a lock. In this case, the kernel will call `schedule` to run the next
+process. But what if the user-space program never sleeps? Here's one such
+program:
+
+{% highlight c %}
+int main()
+{
+	while(1);
+}
+{% endhighlight %}
+
+
+If `schedule` were only called when a user-space program voluntarily sleeps,
+then programs like the one above would use up the processor indefinitely.
+
+
+To remedy this problem, the kernel must preempt the currently-running process
+if it's been running for too long. This occurs via the timer interrupt. The timer
+interrupt fires periodically, allowing control to jump to the timer interrupt
+handler in the kernel. This handler calls the function `update_process_times`,
+shown below.
 
 {% highlight c %}
 /*
@@ -136,31 +157,249 @@ void update_process_times(int user_tick)
 {% endhighlight %}
 
 
-This function is called whenever the clock ticks. Notice how `update_process_times`
-invokes `scheduler_tick`. In `scheduler_tick`, the scheduler checks to see if the
-running process's time has expired. If so, it sets a (over-simplification alert) global
-flag called `need_resched`. This indicates to the rest of the kernel that the
-`schedule` should be called.
+Notice how `update_process_times` invokes `scheduler_tick`. In
+`scheduler_tick`, the scheduler checks to see if the running process's time has
+expired. If so, it sets a (over-simplification alert) global flag called
+`need_resched`. This indicates to the rest of the kernel that the `schedule`
+should be called. In our simplified example, `scheduler_tick` would set this flag
+when the current process has been running for 10 milliseconds or more.
 
-But wait, why the heck can't the scheduler just call `schedule` by itself, from within the timer
-interrupt? After all, if the scheduler knows that a process's time has expired, shouldn't it
-just context switch right away?
+But wait, why the heck can't `scheduler_tick` just call `schedule` by
+itself, from within the timer interrupt? After all, if the scheduler knows that
+a process's time has expired, shouldn't it just context switch right away?
 
-As it turns out, it is not always safe to call schedule. In particular, if the
-currently running process is holding a spin lock, it cannot be put to sleep.
-(Let me repeat that one more time because people always forget: **you cannot
-sleep with a spin lock.** Sleeping with a spin lock will cause the kernel to
-deadlock, and will bring you anguish for many hours when you can't figure out
-why your process mysteriously froze.)
+As it turns out, it is not always safe to call `schedule`. In particular, if
+the currently running process is holding a spin lock in the kernel, it cannot
+be put to sleep. (Let me repeat that one more time because people always
+forget: **you cannot sleep with a spin lock.** Sleeping with a spin lock will
+cause the kernel to deadlock, and will bring you anguish for many hours when
+you can't figure out why your process mysteriously froze.)
 
 Thus, when the scheduler sets the `need_resched` flag, it's saying "please
 kernel, invoke `schedule` at your earliest convenience, when it's safe to do
 so." The kernel keeps a count of how many spin locks the currently running
 process has acquired. When that count goes down to 0, the kernel knows that
-it's okay to put the process to sleep. So, the kernel checks the `need_resched`
+it's okay to put the process to sleep. The kernel checks the `need_resched`
 flag in two main places:
 
   * when returning from an interrupt handler
   * when returning to user-space from a system call
 
-If `need_resched` is `True` and the spinlock count is 0, then the kernel calls `schedule`.
+If `need_resched` is `True` and the spinlock count is 0, then the kernel calls
+`schedule`. Note that when the kernel is about to return to user-space, it's
+almost always safe to call `schedule`. That's because user-space programs can
+always be preempted. So, by the time the kernel is about to return to
+user-space, it cannot be holding any spinlocks.
+
+## Understanding sched_class
+I've skipped a bunch of stuff to get here because the scheduler assignment is
+due soon. In this section, I will analyze `struct sched_class` and talk
+briefly about what each function does. I've reproduced `struct sched_class`
+below.
+
+{% highlight c %}
+struct sched_class {
+	const struct sched_class *next;
+
+	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int flags);
+	void (*dequeue_task) (struct rq *rq, struct task_struct *p, int flags);
+	void (*yield_task) (struct rq *rq);
+	bool (*yield_to_task) (struct rq *rq, struct task_struct *p,
+			       bool preempt);
+
+	void (*check_preempt_curr) (struct rq *rq, struct task_struct *p,
+				    int flags);
+
+	/*
+	 * It is the responsibility of the pick_next_task() method that will
+	 * return the next task to call put_prev_task() on the @prev task or
+	 * something equivalent.
+	 *
+	 * May return RETRY_TASK when it finds a higher prio class has runnable
+	 * tasks.
+	 */
+	struct task_struct * (*pick_next_task) (struct rq *rq,
+						struct task_struct *prev,
+						struct pin_cookie cookie);
+	void (*put_prev_task) (struct rq *rq, struct task_struct *p);
+
+#ifdef CONFIG_SMP
+	int  (*select_task_rq)(struct task_struct *p, int task_cpu, int sd_flag,
+			       int flags);
+	void (*migrate_task_rq)(struct task_struct *p);
+
+	void (*task_woken) (struct rq *this_rq, struct task_struct *task);
+
+	void (*set_cpus_allowed)(struct task_struct *p,
+				 const struct cpumask *newmask);
+
+	void (*rq_online)(struct rq *rq);
+	void (*rq_offline)(struct rq *rq);
+#endif
+
+	void (*set_curr_task) (struct rq *rq);
+	void (*task_tick) (struct rq *rq, struct task_struct *p, int queued);
+	void (*task_fork) (struct task_struct *p);
+	void (*task_dead) (struct task_struct *p);
+
+        /*
+	 * The switched_from() call is allowed to drop rq->lock, therefore we
+	 * cannot assume the switched_from/switched_to pair is serliazed by
+	 * rq->lock. They are however serialized by p->pi_lock.
+	 */
+	void (*switched_from) (struct rq *this_rq, struct task_struct *task);
+	void (*switched_to) (struct rq *this_rq, struct task_struct *task);
+	void (*prio_changed) (struct rq *this_rq, struct task_struct *task,
+			      int oldprio);
+
+	unsigned int (*get_rr_interval) (struct rq *rq,
+					 struct task_struct *task);
+
+	void (*update_curr) (struct rq *rq);
+
+#define TASK_SET_GROUP  0
+#define TASK_MOVE_GROUP 1
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	void (*task_change_group) (struct task_struct *p, int type);
+#endif
+};
+{% endhighlight %}
+
+# enqueue_task and dequeue_task
+{% highlight c %}
+/* Called to enqueue task_struct p on runqueue rq. */
+void enqueue_task(struct rq *rq, struct task_struct *p, int flags);
+
+/* Called to dequeue task_struct p from runqueue rq. */
+void dequeue_task(struct rq *rq, struct task_struct *p, int flags);
+{% endhighlight %}
+
+`enqueue_task` and `dequeue_task` are used to put a task on the runqueue and remove
+a task from the runqueue, respectively. Each of these functions are passed the task
+to be enqueued/dequeued, as well as the runqueue it should be added/removed
+from. In addition, these functions are given a bit vector of flags that
+describe *why* enqueue or dequeue is being called. Here are the various flags,
+which are described in
+[sched.h](http://lxr.free-electrons.com/source/kernel/sched/sched.h#L1181):
+
+{% highlight c %}
+/*
+* {de,en}queue flags:
+*
+* DEQUEUE_SLEEP  - task is no longer runnable
+* ENQUEUE_WAKEUP - task just became runnable
+*
+* SAVE/RESTORE - an otherwise spurious dequeue/enqueue, done to ensure tasks
+*                are in a known state which allows modification. Such pairs
+*                should preserve as much state as possible.
+*
+* MOVE - paired with SAVE/RESTORE, explicitly does not preserve the location
+*        in the runqueue.
+*
+* ENQUEUE_HEAD      - place at front of runqueue (tail if not specified)
+* ENQUEUE_REPLENISH - CBS (replenish runtime and postpone deadline)
+* ENQUEUE_MIGRATED  - the task was migrated during wakeup
+*
+*/
+{% endhighlight %}
+
+The `flags` argument can be tested using the bitwise `&` operation. For example,
+if the task was just migrated from another CPU, `flags & ENQUEUE_MIGRATED`
+returns 1.
+
+These functions are called for a variety of reasons:
+
+  * When a child process is first forked, `enqueue_task` is called
+  to put it on a runqueue. When a process exits, `dequeue_task`
+  takes it off the runqueue.
+  * When a process goes to sleep, `dequeue_task` takes it off the runqueue.
+  For example, this happens when the process needs to wait for a lock or IO
+  event. When the IO event occurs, or the lock becomes available, the process
+  wakes up. It must then be re-enqueued with `enqueue_task`.
+  * Process migration - if a process must be migrated from one CPU's
+    runqueue to another, it's dequeued from its old runqueue and
+    enqueued on a different one using this function.
+  * When set_cpus_allowed is called to change the task's processor
+    affinity, it may need to be enqueued on a different CPU's runqueue
+  * When the priority of a process is boosted to avoid priority inversion.
+    In this case, p used to have a low-priority sched_class, but is being
+    promoted to a sched_class with high priority. This action occurs in
+    rt_mutex_setprio.
+  * From `__sched_setscheduler`. If a task's `sched_class` has changed, it's
+    dequeued using its old sched_class and enqueued with the new one.
+
+# pick_next_task
+
+{% highlight c %}
+/* Pick the task that should be currently running. */
+struct task_struct *pick_next_task (struct rq *rq,
+				    struct task_struct *prev,
+				    struct pin_cookie cookie);
+{% endhighlight %}
+
+`pick_next_task` is called by the core scheduler to determine which of rq's
+tasks should be running. The name is a bit misleading. This function is not
+supposed to return the task that should run *after* the currently running task;
+instead, it's supposed to return the `task_struct` that should be running now,
+**in this instant.**
+
+The kernel will context switch from the task specified by `prev` to the task
+returned by `pick_next_task`.
+
+
+# put_prev_task
+
+{% highlight c %}
+/* Called right before p is going to be taken off the CPU. */
+void put_prev_task(struct rq *rq, struct task_struct *p);
+{% endhighlight %}
+
+`put_prev_task` is called whenever a task is to be taken off the CPU. The
+behavior of this function is up to the specific `sched_class`. Some schedulers
+do very little in this function. For example, the realtime scheduler
+uses this function as an opportunity to perform simple bookeeping. On the other
+hand, CFS's `put_prev_task_fair` needs to do a bit more work. As an
+optimization, CFS keeps the currently running task out of its RB tree. It uses
+the `put_prev_task` hook as an opportunity to put the currently running task
+(that is, the task specified by `p`) back in the RB tree.
+
+The sched_class's `put_prev_task` is called by the function `put_prev_task`, which
+is [defined](http://lxr.free-electrons.com/source/kernel/sched/sched.h#L1258) in sched.h.
+It seems a bit silly, but the sched_class's `pick_next_task` is expected to call
+`put_prev_task` by itself! This is documented in the following comment:
+
+{% highlight c %}
+/*
+* It is the responsibility of the pick_next_task() method that will
+* return the next task to call put_prev_task() on the @prev task or
+* something equivalent.
+*/
+{% endhighlight %}
+
+# task_tick
+
+{% highlight c %}
+/* Called from the timer interrupt handler. p is the currently running task
+ * and rq is the runqueue that it's on.
+ */
+void task_tick(struct rq *rq, struct task_struct *p, int queued);
+{% endhighlight %}
+
+This is one of the most important scheduler functions. It is called whenever
+a timer interrupt happens, and its job is to perform bookeeping and set the `need_resched`
+flag if the currently-running process needs to be preempted:
+
+The `need_resched` flag can be set by the function `resched_curr`,
+[found](http://lxr.free-electrons.com/source/kernel/sched/core.c#L481) in
+core.c:
+
+{% highlight c %}
+/* Mark rq's currently-running task to be rescheduled. */
+void resched_curr(struct rq *rq)
+{% endhighlight %}
+
+With SMP, there's a `need_resched` flag for every CPU. Thus, `resched_curr`
+might involve sending an APIC inter-processor interrupt to another processor
+(you don't want to go here). The takeway is that you should just use
+`resched_curr` to set `need_resched`, and don't try to do this yourself.
