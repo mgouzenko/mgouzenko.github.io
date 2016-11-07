@@ -306,7 +306,7 @@ which are described in
 
 The `flags` argument can be tested using the bitwise `&` operation. For example,
 if the task was just migrated from another CPU, `flags & ENQUEUE_MIGRATED`
-returns 1.
+evaluates to 1.
 
 These functions are called for a variety of reasons:
 
