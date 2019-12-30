@@ -1,0 +1,84 @@
+{"frames": {
+
+"fragment_0.png":
+{
+	"frame": {"x":2,"y":670,"w":32,"h":69},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":21,"y":24,"w":32,"h":69},
+	"sourceSize": {"w":53,"h":93}
+},
+"fragment_1.png":
+{
+	"frame": {"x":2,"y":98,"w":54,"h":93},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":54,"h":93},
+	"sourceSize": {"w":54,"h":93}
+},
+"fragment_2.png":
+{
+	"frame": {"x":2,"y":741,"w":32,"h":69},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":24,"w":32,"h":69},
+	"sourceSize": {"w":53,"h":93}
+},
+"fragment_3.png":
+{
+	"frame": {"x":2,"y":478,"w":48,"h":94},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":5,"y":0,"w":48,"h":94},
+	"sourceSize": {"w":53,"h":94}
+},
+"fragment_4.png":
+{
+	"frame": {"x":2,"y":2,"w":54,"h":94},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":54,"h":94},
+	"sourceSize": {"w":54,"h":94}
+},
+"fragment_5.png":
+{
+	"frame": {"x":2,"y":574,"w":48,"h":94},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":0,"w":48,"h":94},
+	"sourceSize": {"w":53,"h":94}
+},
+"fragment_6.png":
+{
+	"frame": {"x":2,"y":288,"w":53,"h":93},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":53,"h":93},
+	"sourceSize": {"w":53,"h":93}
+},
+"fragment_7.png":
+{
+	"frame": {"x":2,"y":193,"w":54,"h":93},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":54,"h":93},
+	"sourceSize": {"w":54,"h":93}
+},
+"fragment_8.png":
+{
+	"frame": {"x":2,"y":383,"w":53,"h":93},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":53,"h":93},
+	"sourceSize": {"w":53,"h":93}
+}},
+"meta": {
+	"app": "http://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "fragments.png",
+	"format": "RGBA8888",
+	"size": {"w":58,"h":812},
+	"scale": "1",
+	"smartupdate": "$TexturePacker:SmartUpdate:3c94c605d962c2720c6d6a57172a28f6:6dfcf983e110fd4e929e1f8e374bc469:deddbd798735598e07e4fbf3f0f10fd9$"
+}
+}
